@@ -1,0 +1,31 @@
+name: sift
+description: "Sift: sort your SMS inbox into categories and delete them in bulk."
+publish_to: 'none'
+version: 1.0.1+2
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  theme:
+    path: ../theme
+  permission_handler: ^12.0.1
+  shared_preferences: ^2.5.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon/logo-1024.png"
+  min_sdk_android: 26
+  adaptive_icon_background: "assets/icon/logo_background-1024.png"
+  adaptive_icon_foreground: "assets/icon/logo_foreground-1024.png"

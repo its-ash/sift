@@ -1,0 +1,11 @@
+{
+  "id": "sift",
+  "name": "Sift",
+  "repo": "its-ash/sift",
+  "package": "com.itsash.sift",
+  "tagline": "Sort your SMS inbox into categories and delete them in bulk.",
+  "description": "Sift sorts your SMS inbox into OTPs, bank and payments, orders and deliveries, promotions, alerts and personal messages. Delete a whole category, pick single messages, or select everything and clear it in one go. Sorting happens on your phone and your messages never leave it.",
+  "category": "Utilities",
+  "icon": "assets/icon/logo-1024.png",
+  "homepage": "https://sift.itsash.in/"
+}
