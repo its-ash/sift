@@ -23,6 +23,24 @@ Sort your SMS inbox into categories and delete them in bulk.
 
 Requires Android 8.0 (API 26) or later.
 
+### If Android blocks SMS access (Allow restricted settings)
+
+On Android 13 and later, apps installed from an APK (not from a store) get
+"Restricted settings": Android refuses the SMS permission and the default SMS
+app request until you allow it. Symptoms: the permission prompt does not
+appear or vanishes at once, or Sift cannot become the default SMS app.
+
+- **Android 13**: Settings, Apps, Sift (See all apps if needed), tap the three
+  dots at the top right, tap **Allow restricted settings**, confirm.
+- **Android 14**: Settings, Apps, All apps, Sift, three dots at the top right,
+  **Allow restricted settings**, confirm with your PIN or fingerprint.
+- **Android 15 and later**: same path. The menu item appears only after you
+  have tried to grant a permission once, so tap **Allow access** in Sift first,
+  then open Settings, Apps, Sift, three dots, **Allow restricted settings**.
+
+Then return to Sift and tap **Retry**. The same guide is in Sift under
+Settings, Permissions. Installing through Ash Store may avoid the restriction.
+
 Android lets only the **default SMS app** delete messages. When you delete,
 Sift asks to become the default SMS app, deletes, then helps you switch
 back to your messaging app. While Sift is the default, new texts are still
@@ -56,11 +74,14 @@ lib/
 │   ├── categorizer.dart          # SmsCategory + keyword rules
 │   ├── sms_message.dart          # one inbox message
 │   ├── sms_platform.dart         # MethodChannel to MainActivity.kt
+│   ├── sms_delete.dart           # chunked delete + exact counting (bridge)
+│   ├── role_state.dart           # role state, restricted-settings logic and steps
 │   └── inbox_store.dart          # inbox, selection, delete, default-app state
 └── screens/
     ├── home_screen.dart          # categories, Select all, Delete
     ├── category_screen.dart      # messages of one category
     ├── delete_flow.dart          # confirm → take SMS role → delete → switch back
+    ├── restricted_guide.dart     # "Allow restricted settings" guide
     └── settings_screen.dart
 android/app/src/main/kotlin/com/itsash/sift/
 ├── MainActivity.kt               # read inbox, delete, default SMS role

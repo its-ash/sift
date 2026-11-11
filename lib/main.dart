@@ -18,7 +18,6 @@ class SiftApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return UiApp(
       title: 'Sift',
-      themeMode: ThemeMode.system,
       home: HomeScreen(store: store),
     );
   }

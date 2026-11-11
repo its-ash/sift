@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:theme/theme.dart';
 
 import '../sms/inbox_store.dart';
+import '../sms/role_state.dart';
 import '../sms/sms_platform.dart';
+import 'restricted_guide.dart';
 
 /// Confirm → become the default SMS app if needed → delete → offer to switch back.
 ///
@@ -26,6 +28,13 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
 
   final app = await store.refreshDefaultApp();
   if (!context.mounted) return;
+  if (store.roleUi == SmsRoleUiState.unavailable) {
+    context.showToast(
+      'This phone has no default SMS app role, so Sift cannot delete messages.',
+      status: UiStatus.danger,
+    );
+    return;
+  }
   if (!app.isSelf) {
     final go = await UiDialog.confirm(
       context,
@@ -40,6 +49,12 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
     final granted = await store.becomeDefault();
     if (!context.mounted) return;
     if (!granted) {
+      if (store.restrictedSuspected) {
+        var retry = false;
+        await showRestrictedGuideSheet(context, store, onRetry: () => retry = true);
+        if (retry && context.mounted) await confirmAndDelete(context, store, list);
+        return;
+      }
       context.showToast(
         'Sift was not set as the default SMS app, so nothing was deleted.',
         status: UiStatus.warning,
@@ -49,9 +64,28 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
   }
 
   try {
-    final deleted = await store.delete(list);
+    final result = await store.delete(list);
     if (!context.mounted) return;
-    context.showToast('Deleted $deleted ${deleted == 1 ? 'message' : 'messages'}.', status: UiStatus.success);
+    final deleted = result.deleted;
+    if (deleted == 0) {
+      context.showToast(
+        'Android reported 0 messages deleted. Sift may not really be the default SMS app, or the messages are protected.',
+        title: 'Nothing deleted',
+        status: UiStatus.danger,
+      );
+    } else if (!result.complete) {
+      context.showToast(
+        'Deleted $deleted of ${result.requested}. ${result.failed} could not be removed.',
+        status: UiStatus.warning,
+      );
+    } else {
+      context.showToast('Deleted $deleted ${deleted == 1 ? 'message' : 'messages'}.', status: UiStatus.success);
+    }
+  } on SmsSecurityException catch (e) {
+    if (context.mounted) {
+      context.showToast(e.message, title: 'Android blocked the delete', status: UiStatus.danger);
+    }
+    return;
   } on NotDefaultSmsAppException {
     if (context.mounted) {
       context.showToast('Sift is not the default SMS app, so nothing was deleted.', status: UiStatus.danger);
@@ -77,7 +111,8 @@ Future<void> offerSwitchBack(BuildContext context, InboxStore store) async {
     title: 'Switch back to ${store.previousName}?',
     message:
         'Sift keeps new texts in your inbox while it is the default, but it does not show '
-        'notifications or send messages. Pick ${store.previousName} on the next screen.',
+        'notifications or send messages. Open the default apps screen and pick ${store.previousName} '
+        'as the SMS app.',
     confirmLabel: 'Switch back',
     cancelLabel: 'Later',
     icon: Icons.undo_rounded,

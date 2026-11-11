@@ -9,8 +9,16 @@ everything.
 Android (4.4+) lets only the **default SMS app** write to or delete from the SMS
 provider. Other apps' deletes silently remove nothing. So `delete_flow.dart`:
 confirm → if Sift is not the default, explain, then
-`requestDefaultSmsApp` (RoleManager `ROLE_SMS` on 10+, `ACTION_CHANGE_DEFAULT`
-below) → `deleteMessages` → offer to switch back. Apps can request the role
+`requestDefaultSmsApp` (`RoleManager.createRequestRoleIntent(ROLE_SMS)` on 10+,
+`ACTION_CHANGE_DEFAULT` below; returns `{granted, elapsedMs, error}`) →
+`store.delete` (chunks of 400 via `content://sms` `_id IN (...)`, a chunk that
+removes fewer rows is retried per id via `content://sms/<id>`; returns a
+`DeleteResult(requested, deleted)`; the inbox is re-queried afterwards; the toast
+shows the real count, 0 is reported as an error; `SecurityException` →
+channel code `security`) → offer to switch back. The role is checked with
+`RoleManager.isRoleHeld(ROLE_SMS)` (or `getDefaultSmsPackage`) and shown in
+Settings via `roleUiState`. `deleteThreads` (`content://mms-sms/conversations/<id>`)
+exists on the channel but the UI deletes by message id. Apps can request the role
 only for themselves on 10+, so "switch back" opens the default apps screen;
 below 10 it asks for the saved previous package directly. The previous
 default's package and label are kept in `shared_preferences`.
@@ -23,7 +31,26 @@ role, `SmsDeliverReceiver` writes incoming SMS into the inbox so nothing is
 lost; MMS is not saved and no notifications are shown. The home screen shows a
 banner while Sift is the default.
 
+## Restricted settings (Android 13+)
+
+APK-installed apps get "Restricted settings": the SMS permission and the SMS
+role are refused until the user opens Settings → Apps → Sift → ⋮ → Allow
+restricted settings. `looksRestricted(sdk, outcome)` in `lib/sms/role_state.dart`
+flags it (sdk ≥ 33, not granted, and the request failed or answered in under
+600 ms, or loading the inbox threw a SecurityException). Then
+`InboxStore.restrictedSuspected` is set and the UI shows
+`screens/restricted_guide.dart` (steps for Android 13/14/15, "Open Sift app
+settings" via `ACTION_APPLICATION_DETAILS_SETTINGS`, Retry): in the home
+empty state, in a sheet when the role request fails, and always in Settings →
+Permissions. The same steps are in README.md (Install). Keep all three in sync
+(`restrictedSettingsGuides`).
+
 ## Code layout
+
+- `lib/sms/role_state.dart`, `lib/sms/sms_delete.dart`: pure logic (role →
+  UI state, restricted detection, chunked delete counting over
+  `SmsResolverBridge`). Tests: `test/role_state_test.dart`,
+  `test/sms_delete_test.dart` (fake resolver / fake platform).
 
 - `lib/sms/categorizer.dart`: `SmsCategory` (label, description, icon,
   `UiStatus`) and `SmsCategorizer.categorize(address, body)`. Rule order: OTP →

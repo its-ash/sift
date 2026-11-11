@@ -4,6 +4,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'categorizer.dart';
+import 'role_state.dart';
+import 'sms_delete.dart';
 import 'sms_message.dart';
 import 'sms_platform.dart';
 
@@ -29,6 +31,19 @@ class InboxStore extends ChangeNotifier {
 
   /// Current holder of the default SMS role.
   DefaultSmsApp defaultApp = const DefaultSmsApp();
+
+  /// Role and Android version as last reported by the phone.
+  SmsRoleSnapshot role = const SmsRoleSnapshot();
+  SmsRoleUiState get roleUi => roleUiState(role);
+
+  /// True after a permission or role request was refused in a way that looks
+  /// like Android's "Restricted settings" (see [looksRestricted]).
+  bool restrictedSuspected = false;
+
+  void dismissRestricted() {
+    restrictedSuspected = false;
+    notifyListeners();
+  }
 
   /// The messaging app that was the default before Sift took over.
   String? previousPackage;
@@ -80,10 +95,18 @@ class InboxStore extends ChangeNotifier {
   }
 
   Future<void> requestPermission() async {
+    final watch = Stopwatch()..start();
     final result = await Permission.sms.request();
+    watch.stop();
     if (result.isGranted) {
+      restrictedSuspected = false;
       await load();
     } else {
+      // A prompt that vanishes at once on Android 13+ is Restricted settings.
+      final sdk = role.sdk;
+      if (looksRestricted(sdk: sdk, outcome: RequestOutcome(granted: false, elapsedMs: watch.elapsedMilliseconds))) {
+        restrictedSuspected = true;
+      }
       status = result.isPermanentlyDenied ? InboxStatus.permanentlyDenied : InboxStatus.needsPermission;
       notifyListeners();
     }
@@ -97,10 +120,20 @@ class InboxStore extends ChangeNotifier {
       status = InboxStatus.ready;
       error = null;
     } on PlatformException catch (e) {
-      status = e.code == 'no_permission' ? InboxStatus.needsPermission : InboxStatus.error;
+      final denied = e.code == 'security' || e.code == 'no_permission';
+      status = denied ? InboxStatus.needsPermission : InboxStatus.error;
+      if (denied && role.sdk >= restrictedSettingsMinSdk) restrictedSuspected = true;
       error = e.message;
     }
     notifyListeners();
+  }
+
+  Future<void> _reloadQuietly() async {
+    try {
+      _setMessages(await _platform.loadInbox());
+    } on PlatformException catch (e) {
+      error = e.message;
+    }
   }
 
   void _setMessages(List<SmsMessage> list) {
@@ -116,7 +149,8 @@ class InboxStore extends ChangeNotifier {
 
   Future<DefaultSmsApp> refreshDefaultApp() async {
     try {
-      defaultApp = await _platform.defaultSmsApp();
+      role = await _platform.roleState();
+      defaultApp = DefaultSmsApp(package: role.defaultPackage, label: role.defaultLabel, isSelf: role.roleHeld);
     } on PlatformException {
       defaultApp = const DefaultSmsApp();
     } on MissingPluginException {
@@ -158,23 +192,50 @@ class InboxStore extends ChangeNotifier {
       await prefs.setString(_prevPackageKey, current.package!);
       if (current.label != null) await prefs.setString(_prevLabelKey, current.label!);
     }
-    final ok = await _platform.requestDefaultSmsApp();
+    final outcome = await _platform.requestDefaultSmsApp();
     await refreshDefaultApp();
+    final ok = outcome.granted || defaultApp.isSelf;
+    if (ok) {
+      restrictedSuspected = false;
+    } else if (looksRestricted(sdk: role.sdk, outcome: outcome)) {
+      restrictedSuspected = true;
+    }
+    notifyListeners();
     return ok;
+  }
+
+  /// Opens Sift's page in Android Settings (where "Allow restricted settings" lives).
+  Future<void> openAppDetails() => _platform.openAppDetails();
+
+  /// Retry after the user allowed restricted settings: ask for the permission again.
+  Future<void> retryAfterRestricted() async {
+    restrictedSuspected = false;
+    notifyListeners();
+    if (status == InboxStatus.ready) {
+      await refreshDefaultApp();
+    } else {
+      await requestPermission();
+    }
   }
 
   /// Hands the default SMS role back to [previousPackage].
   Future<void> restoreDefault() => _platform.restoreDefaultSmsApp(previousPackage);
 
-  /// Deletes [ids] from the phone and reloads the inbox. Returns the number deleted.
-  Future<int> delete(Iterable<int> ids) async {
+  /// Deletes [ids] from the phone, then re-queries the inbox so the list is
+  /// what is really left. Returns how many rows Android reported deleting.
+  Future<DeleteResult> delete(Iterable<int> ids) async {
     deleting = true;
     notifyListeners();
     try {
-      final count = await _platform.deleteMessages(ids);
-      _selected.removeAll(ids);
-      _setMessages(await _platform.loadInbox());
-      return count;
+      DeleteResult result;
+      try {
+        result = await _platform.deleteMessages(ids);
+      } on SmsSecurityException {
+        await _reloadQuietly();
+        rethrow;
+      }
+      await _reloadQuietly();
+      return result;
     } finally {
       deleting = false;
       notifyListeners();

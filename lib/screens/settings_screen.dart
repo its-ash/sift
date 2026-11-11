@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:theme/theme.dart';
 
 import '../sms/inbox_store.dart';
+import '../sms/role_state.dart';
+import 'restricted_guide.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.store});
@@ -33,12 +35,34 @@ class SettingsScreen extends StatelessWidget {
                     value: isSelf ? 'Sift' : (store.defaultApp.label ?? 'Unknown'),
                   ),
                   UiListTile(
+                    'Sift role status',
+                    subtitle: switch (store.roleUi) {
+                      SmsRoleUiState.defaultApp =>
+                        'Sift is the default SMS app. Switch back to ${store.previousName} after cleaning.',
+                      SmsRoleUiState.notDefault => 'Sift is not the default. It asks for the role when you delete.',
+                      SmsRoleUiState.unavailable => 'This phone has no SMS role, so Sift cannot delete.',
+                    },
+                    icon: Icons.verified_user_rounded,
+                    iconStatus: switch (store.roleUi) {
+                      SmsRoleUiState.defaultApp => UiStatus.warning,
+                      SmsRoleUiState.notDefault => UiStatus.info,
+                      SmsRoleUiState.unavailable => UiStatus.danger,
+                    },
+                    value: store.roleUi.title,
+                  ),
+                  UiListTile(
                     isSelf ? 'Switch back to ${store.previousName}' : 'Default apps settings',
                     icon: Icons.swap_horiz_rounded,
                     chevron: true,
                     onTap: store.restoreDefault,
                   ),
                 ],
+              ),
+              const UiGap(UiSpace.lg),
+              UiSection(
+                title: 'Permissions',
+                subtitle: 'If SMS access or the default SMS app request is refused, allow restricted settings.',
+                child: RestrictedSettingsGuide(store: store, showBanner: false),
               ),
               const UiGap(UiSpace.lg),
               const UiListGroup(
@@ -52,6 +76,8 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ],
               ),
+              const UiGap(UiSpace.lg),
+              const UiAppearanceSection(),
               const UiGap(UiSpace.lg),
               const UiUpdateSection(storeId: 'sift'),
               const UiGap(UiSpace.lg),

@@ -4,8 +4,10 @@ import 'package:theme/theme.dart';
 
 import '../sms/categorizer.dart';
 import '../sms/inbox_store.dart';
+import '../sms/role_state.dart';
 import 'category_screen.dart';
 import 'delete_flow.dart';
+import 'restricted_guide.dart';
 import 'settings_screen.dart';
 
 /// The inbox sorted into categories. Tick categories (or Select all) and delete.
@@ -81,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case InboxStatus.loading:
         return const Center(child: UiSpinner(size: 28));
       case InboxStatus.needsPermission:
+        if (store.restrictedSuspected) return _restrictedBody(context);
         return UiEmptyState(
           icon: Icons.sms_rounded,
           title: 'Allow SMS access',
@@ -88,6 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
           action: UiButton('Allow access', icon: Icons.lock_open_rounded, onPressed: store.requestPermission),
         );
       case InboxStatus.permanentlyDenied:
+        if (store.restrictedSuspected || store.role.sdk >= restrictedSettingsMinSdk) return _restrictedBody(context);
         return const UiEmptyState(
           icon: Icons.sms_failed_rounded,
           title: 'SMS access is off',
@@ -108,6 +112,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Widget _restrictedBody(BuildContext context) {
+    return ListView(
+      padding: EdgeInsets.all(UiContent.pagePadding(context)),
+      children: [
+        Text('SMS access is blocked', style: context.text.headlineSmall),
+        const UiGap(UiSpace.sm),
+        RestrictedSettingsGuide(store: store),
+      ],
+    );
+  }
+
   Widget _categoryList(BuildContext context) {
     final text = context.text;
     final colors = context.colors;
@@ -116,7 +131,8 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         if (store.defaultApp.isSelf) ...[
           UiBanner(
-            'Sift is your default SMS app. Switch back to ${store.previousName} to get notifications for new messages.',
+            'Sift is your default SMS app. New texts are saved but you get no notifications and cannot reply. '
+            'Switch back to ${store.previousName} when you are done cleaning.',
             status: UiStatus.warning,
             actionLabel: 'Switch back',
             onAction: store.restoreDefault,
