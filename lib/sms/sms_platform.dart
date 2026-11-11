@@ -60,11 +60,17 @@ class SmsPlatform implements SmsResolverBridge {
   /// Opens Sift's page in Android Settings (ACTION_APPLICATION_DETAILS_SETTINGS).
   Future<void> openAppDetails() => _channel.invokeMethod<void>('openAppDetails');
 
-  Future<List<SmsMessage>> loadInbox() async {
-    final rows = await _channel.invokeListMethod<Map<Object?, Object?>>('loadInbox') ?? const [];
+  /// The whole SMS store (all boxes) plus MMS, newest first.
+  Future<List<SmsMessage>> loadMessages() async {
+    final rows = await _channel.invokeListMethod<Map<Object?, Object?>>('loadMessages') ?? const [];
     // Sorting tens of thousands of messages takes a moment: keep it off the UI thread.
-    return Isolate.run(() => [for (final r in rows) SmsMessage.fromMap(r)]);
+    return Isolate.run(() => parseMessages(rows));
   }
+
+  /// Opens Google Messages, or the default SMS app if it is not installed.
+  /// Returns "google", "default" or "none".
+  Future<String> openGoogleMessages() async =>
+      await _channel.invokeMethod<String>('openGoogleMessages') ?? 'none';
 
   @override
   Future<int> deleteByIds(List<int> ids) => _delete('deleteByIds', {'ids': ids});
@@ -72,11 +78,15 @@ class SmsPlatform implements SmsResolverBridge {
   @override
   Future<int> deleteById(int id) => _delete('deleteById', {'id': id});
 
-  /// Deletes whole conversations via `content://mms-sms/conversations/<threadId>`.
-  Future<int> deleteThreads(List<int> threadIds) => _delete('deleteThreads', {'threadIds': threadIds});
+  @override
+  Future<int> deleteMmsByIds(List<int> ids) => _delete('deleteMmsByIds', {'ids': ids});
 
-  /// Deletes messages by id and returns how many Android removed.
-  Future<DeleteResult> deleteMessages(Iterable<int> ids) => deleteSms(this, ids);
+  @override
+  Future<int> deleteMmsById(int id) => _delete('deleteMmsById', {'id': id});
+
+  /// Deletes whole conversations via `content://mms-sms/conversations/<threadId>`.
+  @override
+  Future<int> deleteThreads(List<int> threadIds) => _delete('deleteThreads', {'threadIds': threadIds});
 
   Future<int> _delete(String method, Map<String, Object?> args) async {
     try {

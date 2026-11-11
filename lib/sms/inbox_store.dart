@@ -25,9 +25,34 @@ class InboxStore extends ChangeNotifier {
   String? error;
   bool deleting = false;
 
+  List<SmsMessage> _all = const [];
   List<SmsMessage> _messages = const [];
   Map<SmsCategory, List<SmsMessage>> _byCategory = const {};
   final Set<int> _selected = {};
+  MessageFilter _filter = MessageFilter.all;
+
+  /// What the last clean removed. Null until a clean finishes (or dismissed).
+  CleanSummary? lastSummary;
+
+  MessageFilter get filter => _filter;
+
+  /// Every message on the phone (SMS and MMS, all boxes), ignoring the filter.
+  List<SmsMessage> get allMessages => _all;
+
+  /// Shows only messages matching [f]. The selection is cleared so nothing
+  /// hidden can be deleted.
+  void setFilter(MessageFilter f) {
+    if (f == _filter) return;
+    _filter = f;
+    _selected.clear();
+    _applyFilter();
+    notifyListeners();
+  }
+
+  void dismissSummary() {
+    lastSummary = null;
+    notifyListeners();
+  }
 
   /// Current holder of the default SMS role.
   DefaultSmsApp defaultApp = const DefaultSmsApp();
@@ -49,6 +74,7 @@ class InboxStore extends ChangeNotifier {
   String? previousPackage;
   String? previousLabel;
 
+  /// The messages that match the filter.
   List<SmsMessage> get messages => _messages;
   int get total => _messages.length;
   Set<int> get selected => _selected;
@@ -62,13 +88,13 @@ class InboxStore extends ChangeNotifier {
 
   List<SmsMessage> inCategory(SmsCategory c) => _byCategory[c] ?? const [];
 
-  int selectedIn(SmsCategory c) => inCategory(c).where((m) => _selected.contains(m.id)).length;
+  int selectedIn(SmsCategory c) => inCategory(c).where((m) => _selected.contains(m.key)).length;
 
   /// true = all, false = none, null = some. For tristate checkboxes.
   bool? selectionState(Iterable<SmsMessage> list) {
     var any = false, all = true;
     for (final m in list) {
-      if (_selected.contains(m.id)) {
+      if (_selected.contains(m.key)) {
         any = true;
       } else {
         all = false;
@@ -116,7 +142,7 @@ class InboxStore extends ChangeNotifier {
     status = InboxStatus.loading;
     notifyListeners();
     try {
-      _setMessages(await _platform.loadInbox());
+      _setMessages(await _platform.loadMessages());
       status = InboxStatus.ready;
       error = null;
     } on PlatformException catch (e) {
@@ -128,23 +154,32 @@ class InboxStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _reloadQuietly() async {
+  /// Re-queries the phone. Returns false if that failed.
+  Future<bool> _reloadQuietly() async {
     try {
-      _setMessages(await _platform.loadInbox());
+      _setMessages(await _platform.loadMessages());
+      return true;
     } on PlatformException catch (e) {
       error = e.message;
+      return false;
     }
   }
 
   void _setMessages(List<SmsMessage> list) {
+    _all = list;
+    _applyFilter();
+    final keys = {for (final m in list) m.key};
+    _selected.retainWhere(keys.contains);
+  }
+
+  void _applyFilter() {
+    final list = [for (final m in _all) if (_filter.matches(m)) m];
     _messages = list;
     final groups = <SmsCategory, List<SmsMessage>>{};
     for (final m in list) {
       (groups[m.category] ??= []).add(m);
     }
     _byCategory = groups;
-    final ids = {for (final m in list) m.id};
-    _selected.retainWhere(ids.contains);
   }
 
   Future<DefaultSmsApp> refreshDefaultApp() async {
@@ -160,18 +195,19 @@ class InboxStore extends ChangeNotifier {
     return defaultApp;
   }
 
-  void toggle(int id) {
-    _selected.contains(id) ? _selected.remove(id) : _selected.add(id);
+  /// Toggles one message by [SmsMessage.key].
+  void toggle(int key) {
+    _selected.contains(key) ? _selected.remove(key) : _selected.add(key);
     notifyListeners();
   }
 
   /// Selects every message in [list], or clears them all if all are already selected.
   void toggleAll(Iterable<SmsMessage> list) {
-    final ids = list.map((m) => m.id).toList();
+    final keys = list.map((m) => m.key).toList();
     if (selectionState(list) == true) {
-      _selected.removeAll(ids);
+      _selected.removeAll(keys);
     } else {
-      _selected.addAll(ids);
+      _selected.addAll(keys);
     }
     notifyListeners();
   }
@@ -221,21 +257,47 @@ class InboxStore extends ChangeNotifier {
   /// Hands the default SMS role back to [previousPackage].
   Future<void> restoreDefault() => _platform.restoreDefaultSmsApp(previousPackage);
 
-  /// Deletes [ids] from the phone, then re-queries the inbox so the list is
-  /// what is really left. Returns how many rows Android reported deleting.
-  Future<DeleteResult> delete(Iterable<int> ids) async {
+  /// Opens Google Messages (or the default SMS app). See [SmsPlatform.openGoogleMessages].
+  Future<String> openGoogleMessages() => _platform.openGoogleMessages();
+
+  /// Deletes the messages with these [SmsMessage.key]s by id (SMS through
+  /// content://sms, MMS through content://mms), then re-queries.
+  Future<CleanSummary> delete(Iterable<int> keys) =>
+      runPlan(planDelete(_all, keys.toSet()));
+
+  /// Deletes every message in thread [threadId] (SMS and MMS) as one conversation.
+  Future<CleanSummary> deleteConversation(int threadId) {
+    final keys = {for (final m in _all) if (m.threadId == threadId) m.key};
+    return runPlan(planDelete(_all, keys, useThreads: true));
+  }
+
+  /// Deletes everything the filter shows: threads where every message is
+  /// shown go as whole conversations, the rest by id.
+  Future<CleanSummary> deleteShown() =>
+      runPlan(planDelete(_all, {for (final m in _messages) m.key}, useThreads: true));
+
+  /// Runs [plan], re-queries the phone, and records the [lastSummary].
+  Future<CleanSummary> runPlan(DeletePlan plan) async {
     deleting = true;
     notifyListeners();
     try {
-      DeleteResult result;
+      final before = _all;
+      final DeleteOutcome outcome;
       try {
-        result = await _platform.deleteMessages(ids);
+        outcome = await executeDelete(_platform, plan);
       } on SmsSecurityException {
         await _reloadQuietly();
         rethrow;
       }
-      await _reloadQuietly();
-      return result;
+      final reloaded = await _reloadQuietly();
+      final summary = summarize(
+        plan,
+        outcome,
+        allBefore: before,
+        remaining: reloaded ? {for (final m in _all) m.key} : null,
+      );
+      if (summary.removed > 0) lastSummary = summary;
+      return summary;
     } finally {
       deleting = false;
       notifyListeners();

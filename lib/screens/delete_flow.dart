@@ -4,6 +4,8 @@ import 'package:theme/theme.dart';
 
 import '../sms/inbox_store.dart';
 import '../sms/role_state.dart';
+import '../sms/sms_delete.dart';
+import '../sms/sms_message.dart';
 import '../sms/sms_platform.dart';
 import 'restricted_guide.dart';
 
@@ -11,8 +13,9 @@ import 'restricted_guide.dart';
 ///
 /// Android lets only the default SMS app delete messages, so Sift takes the
 /// role for the delete and then helps the user give it back.
-Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<int> ids) async {
-  final list = ids.toList();
+/// [keys] are [SmsMessage.key]s (SMS and MMS) deleted by id.
+Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<int> keys) async {
+  final list = keys.toList();
   if (list.isEmpty) return;
   final n = list.length;
   final noun = n == 1 ? 'message' : 'messages';
@@ -20,12 +23,56 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
   final ok = await UiDialog.confirm(
     context,
     title: 'Delete $n $noun?',
-    message: 'They are removed from the SMS inbox on this phone. This cannot be undone.',
+    message: 'They are removed from the SMS and MMS store on this phone. This cannot be undone.',
     confirmLabel: 'Delete',
     destructive: true,
   );
   if (!ok || !context.mounted) return;
+  await _performDelete(context, store, () => store.delete(list));
+}
 
+/// Deletes the whole conversation (SMS + MMS) that [m] belongs to.
+Future<void> confirmDeleteConversation(BuildContext context, InboxStore store, SmsMessage m) async {
+  final inThread = store.allMessages.where((x) => x.threadId == m.threadId).length;
+  final ok = await UiDialog.confirm(
+    context,
+    title: 'Delete whole conversation?',
+    message:
+        'All ${m.threadId > 0 ? inThread : 1} messages (SMS and MMS, sent and received) with ${m.sender} '
+        'are removed from this phone. This cannot be undone.',
+    confirmLabel: 'Delete conversation',
+    destructive: true,
+  );
+  if (!ok || !context.mounted) return;
+  await _performDelete(context, store, () => store.deleteConversation(m.threadId));
+}
+
+/// Deletes everything the current filter shows, after two confirmations.
+Future<void> confirmDeleteShown(BuildContext context, InboxStore store) async {
+  final n = store.total;
+  if (n == 0) return;
+  final first = await UiDialog.confirm(
+    context,
+    title: 'Delete everything shown?',
+    message:
+        'This deletes all $n ${store.filter.label.toLowerCase()} messages listed here, including whole '
+        'conversations where every message is shown.',
+    confirmLabel: 'Continue',
+    destructive: true,
+  );
+  if (!first || !context.mounted) return;
+  final second = await UiDialog.confirm(
+    context,
+    title: 'Really delete $n messages?',
+    message: 'This cannot be undone. Nothing is backed up.',
+    confirmLabel: 'Delete $n',
+    destructive: true,
+  );
+  if (!second || !context.mounted) return;
+  await _performDelete(context, store, store.deleteShown);
+}
+
+Future<void> _performDelete(BuildContext context, InboxStore store, Future<CleanSummary> Function() run) async {
   final app = await store.refreshDefaultApp();
   if (!context.mounted) return;
   if (store.roleUi == SmsRoleUiState.unavailable) {
@@ -52,7 +99,7 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
       if (store.restrictedSuspected) {
         var retry = false;
         await showRestrictedGuideSheet(context, store, onRetry: () => retry = true);
-        if (retry && context.mounted) await confirmAndDelete(context, store, list);
+        if (retry && context.mounted) await _performDelete(context, store, run);
         return;
       }
       context.showToast(
@@ -64,10 +111,9 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
   }
 
   try {
-    final result = await store.delete(list);
+    final result = await run();
     if (!context.mounted) return;
-    final deleted = result.deleted;
-    if (deleted == 0) {
+    if (result.removed == 0) {
       context.showToast(
         'Android reported 0 messages deleted. Sift may not really be the default SMS app, or the messages are protected.',
         title: 'Nothing deleted',
@@ -75,11 +121,12 @@ Future<void> confirmAndDelete(BuildContext context, InboxStore store, Iterable<i
       );
     } else if (!result.complete) {
       context.showToast(
-        'Deleted $deleted of ${result.requested}. ${result.failed} could not be removed.',
+        'Removed ${result.removedSms} SMS and ${result.removedMms} MMS. '
+        '${result.failed} could not be removed.',
         status: UiStatus.warning,
       );
     } else {
-      context.showToast('Deleted $deleted ${deleted == 1 ? 'message' : 'messages'}.', status: UiStatus.success);
+      context.showToast(result.message, status: UiStatus.success);
     }
   } on SmsSecurityException catch (e) {
     if (context.mounted) {

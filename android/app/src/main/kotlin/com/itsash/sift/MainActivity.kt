@@ -27,8 +27,12 @@ import java.util.concurrent.Executors
  *     (Restricted settings on Android 13+).
  *   - restoreDefaultSmsApp({package}) -> "requested" | "settings".
  *   - openAppDetails(): Sift's page in Android Settings.
- *   - loadInbox() -> List<{id, threadId, address, body, date, read}>, newest first.
+ *   - loadMessages() -> List<{kind: sms|mms, id, threadId, address, body, date (ms), read, box}>:
+ *     every row of content://sms (all types) and content://mms (text part, sender/recipient).
+ *     box = Sms.TYPE / Mms.MESSAGE_BOX (1 inbox, 2 sent, 3 draft, 4 outbox, 5 failed, 6 queued).
+ *   - openGoogleMessages() -> "google" | "default" | "none".
  *   - deleteByIds({ids}) / deleteById({id}) -> rows deleted (content://sms).
+ *   - deleteMmsByIds({ids}) / deleteMmsById({id}) -> rows deleted (content://mms).
  *   - deleteThreads({threadIds}) -> rows deleted (content://mms-sms/conversations/<id>).
  *     Deletes fail with "not_default" when Sift is not the default SMS app and
  *     "security" on SecurityException. All provider work runs on a background thread.
@@ -57,7 +61,15 @@ class MainActivity : FlutterActivity() {
                     )
                     result.success(null)
                 }
-                "loadInbox" -> background(result) { loadInbox() }
+                "loadMessages" -> background(result) { loadMessages() }
+                "openGoogleMessages" -> result.success(openGoogleMessages())
+                "deleteMmsByIds" -> deleteCall(result) {
+                    val ids = (call.argument<List<Any>>("ids") ?: emptyList()).map { (it as Number).toLong() }
+                    deleteMmsByIds(ids)
+                }
+                "deleteMmsById" -> deleteCall(result) {
+                    deleteMmsById((call.argument<Number>("id") ?: 0).toLong())
+                }
                 "deleteByIds" -> deleteCall(result) {
                     val ids = (call.argument<List<Any>>("ids") ?: emptyList()).map { (it as Number).toLong() }
                     deleteByIds(ids)
@@ -208,13 +220,130 @@ class MainActivity : FlutterActivity() {
         return "settings"
     }
 
-    private fun loadInbox(): List<Map<String, Any?>> {
+    private fun openGoogleMessages(): String {
+        val google = "com.google.android.apps.messaging"
+        val launch = packageManager.getLaunchIntentForPackage(google)
+            ?: Telephony.Sms.getDefaultSmsPackage(this)?.let { packageManager.getLaunchIntentForPackage(it) }
+        if (launch == null) return "none"
+        return try {
+            startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (launch.component?.packageName == google || launch.`package` == google) "google" else "default"
+        } catch (_: Exception) {
+            "none"
+        }
+    }
+
+    /** All SMS (every box) and MMS, in one list. Dart sorts it. */
+    private fun loadMessages(): List<Map<String, Any?>> {
         if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             throw SecurityException("READ_SMS not granted")
         }
         val out = ArrayList<Map<String, Any?>>()
+        loadSms(out)
+        try {
+            loadMms(out)
+        } catch (e: SecurityException) {
+            throw e
+        } catch (_: Exception) {
+            // MMS is best effort: a broken MMS provider must not hide the SMS.
+        }
+        return out
+    }
+
+    /** MMS rows with text part and address. */
+    private fun loadMms(out: MutableList<Map<String, Any?>>) {
+        val mmsUri = Uri.parse("content://mms")
         contentResolver.query(
-            Telephony.Sms.Inbox.CONTENT_URI,
+            mmsUri,
+            arrayOf("_id", "thread_id", "date", "msg_box", "read"),
+            null,
+            null,
+            "date DESC",
+        )?.use { c ->
+            val id = c.getColumnIndexOrThrow("_id")
+            val thread = c.getColumnIndexOrThrow("thread_id")
+            val date = c.getColumnIndexOrThrow("date")
+            val box = c.getColumnIndexOrThrow("msg_box")
+            val read = c.getColumnIndexOrThrow("read")
+            while (c.moveToNext()) {
+                val mmsId = c.getLong(id)
+                val boxType = c.getInt(box)
+                out.add(
+                    mapOf(
+                        "kind" to "mms",
+                        "id" to mmsId,
+                        "threadId" to c.getLong(thread),
+                        "address" to mmsAddress(mmsId, boxType),
+                        "body" to mmsText(mmsId),
+                        "date" to c.getLong(date) * 1000L,
+                        "read" to (c.getInt(read) != 0),
+                        "box" to boxType,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Sender (addr type 137 = FROM). For sent MMS the recipient (151 = TO) is shown instead. */
+    private fun mmsAddress(mmsId: Long, box: Int): String {
+        val wanted = if (box == 2) listOf(151, 137) else listOf(137, 151)
+        try {
+            contentResolver.query(
+                Uri.parse("content://mms/$mmsId/addr"),
+                arrayOf("address", "type"),
+                null,
+                null,
+                null,
+            )?.use { c ->
+                val rows = ArrayList<Pair<Int, String>>()
+                while (c.moveToNext()) {
+                    val a = c.getString(0) ?: continue
+                    if (a.isNotEmpty() && a != "insert-address-token") rows.add(c.getInt(1) to a)
+                }
+                for (type in wanted) rows.firstOrNull { it.first == type }?.let { return it.second }
+                rows.firstOrNull()?.let { return it.second }
+            }
+        } catch (_: Exception) {
+        }
+        return ""
+    }
+
+    /** Joined text/plain parts (content://mms/<id>/part where ct='text/plain'). */
+    private fun mmsText(mmsId: Long): String {
+        val sb = StringBuilder()
+        try {
+            contentResolver.query(
+                Uri.parse("content://mms/$mmsId/part"),
+                arrayOf("_id", "text", "_data"),
+                "ct='text/plain'",
+                null,
+                null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    var text = c.getString(1)
+                    if (text == null && c.getString(2) != null) {
+                        text = try {
+                            contentResolver.openInputStream(Uri.parse("content://mms/part/${c.getLong(0)}"))
+                                ?.bufferedReader()?.use { it.readText() }
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    if (!text.isNullOrBlank()) {
+                        if (sb.isNotEmpty()) sb.append('\n')
+                        sb.append(text)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return sb.toString()
+    }
+
+    /** Every row of content://sms (inbox, sent, draft, outbox, failed, queued). */
+    private fun loadSms(out: MutableList<Map<String, Any?>>) {
+        contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
             arrayOf(
                 Telephony.Sms._ID,
                 Telephony.Sms.THREAD_ID,
@@ -222,6 +351,7 @@ class MainActivity : FlutterActivity() {
                 Telephony.Sms.BODY,
                 Telephony.Sms.DATE,
                 Telephony.Sms.READ,
+                Telephony.Sms.TYPE,
             ),
             null,
             null,
@@ -233,9 +363,12 @@ class MainActivity : FlutterActivity() {
             val body = c.getColumnIndexOrThrow(Telephony.Sms.BODY)
             val date = c.getColumnIndexOrThrow(Telephony.Sms.DATE)
             val read = c.getColumnIndexOrThrow(Telephony.Sms.READ)
+            val type = c.getColumnIndexOrThrow(Telephony.Sms.TYPE)
             while (c.moveToNext()) {
                 out.add(
                     mapOf(
+                        "kind" to "sms",
+                        "box" to c.getInt(type),
                         "id" to c.getLong(id),
                         "threadId" to c.getLong(thread),
                         "address" to (c.getString(address) ?: ""),
@@ -246,8 +379,16 @@ class MainActivity : FlutterActivity() {
                 )
             }
         }
-        return out
     }
+
+    /** One ContentResolver.delete on content://mms for a chunk of ids. Returns rows removed. */
+    private fun deleteMmsByIds(ids: List<Long>): Int {
+        if (ids.isEmpty()) return 0
+        return contentResolver.delete(Uri.parse("content://mms"), "_id IN (${ids.joinToString(",")})", null)
+    }
+
+    /** content://mms/<id>. */
+    private fun deleteMmsById(id: Long): Int = contentResolver.delete(Uri.parse("content://mms/$id"), null, null)
 
     /** One ContentResolver.delete on content://sms for a chunk of ids. Returns rows removed. */
     private fun deleteByIds(ids: List<Long>): Int {

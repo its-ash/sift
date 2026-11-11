@@ -3,6 +3,7 @@ import 'package:theme/theme.dart';
 
 import '../sms/inbox_store.dart';
 import '../sms/role_state.dart';
+import 'rcs_card.dart';
 import 'restricted_guide.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -64,6 +65,8 @@ class SettingsScreen extends StatelessWidget {
                 subtitle: 'If SMS access or the default SMS app request is refused, allow restricted settings.',
                 child: RestrictedSettingsGuide(store: store, showBanner: false),
               ),
+              const UiGap(UiSpace.lg),
+              RcsCard(store: store),
               const UiGap(UiSpace.lg),
               const UiListGroup(
                 header: 'Privacy',

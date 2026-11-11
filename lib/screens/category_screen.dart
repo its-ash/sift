@@ -19,7 +19,7 @@ class CategoryScreen extends StatelessWidget {
       listenable: store,
       builder: (context, _) {
         final list = store.inCategory(category);
-        final picked = [for (final m in list) if (store.selected.contains(m.id)) m.id];
+        final picked = [for (final m in list) if (store.selected.contains(m.key)) m.key];
         return UiScaffold(
           appBar: UiAppBar(title: category.label, subtitle: '${list.length} messages'),
           padding: EdgeInsets.zero,
@@ -59,11 +59,31 @@ class CategoryScreen extends StatelessWidget {
     return UiListTile(
       m.sender,
       subtitle: m.body.replaceAll(RegExp(r'\s+'), ' ').trim(),
-      leading: UiCheckbox(store.selected.contains(m.id), onChanged: (_) => store.toggle(m.id)),
+      leading: UiCheckbox(store.selected.contains(m.key), onChanged: (_) => store.toggle(m.key)),
       value: UiFormat.relativeTime(m.date),
-      selected: store.selected.contains(m.id),
-      onTap: () => store.toggle(m.id),
-      onLongPress: () => UiDialog.alert(context, title: m.sender, message: m.body, icon: category.icon),
+      trailing: UiTag(m.chip, status: m.kind == MessageKind.mms ? UiStatus.info : null),
+      selected: store.selected.contains(m.key),
+      onTap: () => store.toggle(m.key),
+      onLongPress: () => _details(context, m),
     );
+  }
+
+  /// The full text, with a button to delete the whole conversation.
+  Future<void> _details(BuildContext context, SmsMessage m) async {
+    final delete = await UiSheet.show<bool>(
+      context,
+      title: m.sender,
+      subtitle: '${m.chip} · ${UiFormat.relativeTime(m.date)}',
+      child: Text(m.body),
+      actions: [
+        UiButton(
+          'Delete whole conversation',
+          icon: Icons.delete_sweep_rounded,
+          variant: UiButtonVariant.danger,
+          onPressed: () => Navigator.of(context).pop(true),
+        ),
+      ],
+    );
+    if (delete == true && context.mounted) await confirmDeleteConversation(context, store, m);
   }
 }

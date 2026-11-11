@@ -11,8 +11,16 @@ Sort your SMS inbox into categories and delete them in bulk.
   sender ids (`VM-AMAZON-P` is promotional).
 - **Delete by category**: tick a category to select all of it, or open it and
   pick single messages. Long-press a message to read all of it.
-- **Select all** clears the whole inbox in one go.
-- **Asks before it deletes**, and shows how many messages it removed.
+- **The whole SMS store**: received, sent, drafts and failed SMS, plus MMS
+  (with their text). Each row has a chip such as `MMS · Sent`; filter by
+  Received, Sent or MMS.
+- **Select all** clears everything shown in one go. **Delete everything shown**
+  asks twice and removes whole conversations where every message is selected.
+- **Delete whole conversation**: long-press a message, then delete its thread
+  (SMS and MMS together).
+- **Asks before it deletes**, and shows how many SMS and MMS it removed.
+- **RCS explainer** after a clean and in Settings, with a shortcut to Google
+  Messages.
 - **Private**: sorting happens on your phone. The only network call is the
   update check in Settings.
 
@@ -46,6 +54,18 @@ Sift asks to become the default SMS app, deletes, then helps you switch
 back to your messaging app. While Sift is the default, new texts are still
 saved to your inbox, but you get no notifications for them, so switch back
 right away.
+
+## What Sift can't delete
+
+Sift cannot read or delete **RCS chats**. Conversations marked "Chat" in Google
+Messages are RCS. They live only inside Google Messages' own database, so no
+third-party app can delete them (an Android limit, not a Sift bug).
+
+- To clear them: open Google Messages, long-press the conversation, Delete.
+- To stop receiving them: Messages, profile picture, Messages settings, RCS
+  chats, turn off.
+- If deleted SMS or MMS still appear in Google Messages, force-stop Google
+  Messages or restart the phone; it can keep a stale thread list.
 
 ## Develop
 

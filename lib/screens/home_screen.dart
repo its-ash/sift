@@ -6,7 +6,9 @@ import '../sms/categorizer.dart';
 import '../sms/inbox_store.dart';
 import '../sms/role_state.dart';
 import 'category_screen.dart';
+import '../sms/sms_message.dart';
 import 'delete_flow.dart';
+import 'rcs_card.dart';
 import 'restricted_guide.dart';
 import 'settings_screen.dart';
 
@@ -101,13 +103,6 @@ class _HomeScreenState extends State<HomeScreen> {
       case InboxStatus.error:
         return UiErrorState(message: store.error ?? 'Could not read the inbox.', onRetry: store.load);
       case InboxStatus.ready:
-        if (store.total == 0) {
-          return const UiEmptyState(
-            icon: Icons.mark_email_read_rounded,
-            title: 'Inbox is empty',
-            message: 'There are no SMS messages to clean up.',
-          );
-        }
         return _categoryList(context);
     }
   }
@@ -139,17 +134,48 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const UiGap(UiSpace.lg),
         ],
+        if (store.lastSummary != null) ...[
+          RcsCard(store: store, summary: store.lastSummary!.message, onDismiss: store.dismissSummary),
+          const UiGap(UiSpace.lg),
+        ],
         Text('${store.total} messages', style: text.headlineSmall),
         const UiGap(UiSpace.xs),
         Text(
-          'Sorted on this phone into ${store.categories.length} categories. Tick a category to select all of it, or open it to pick messages.',
+          'SMS and MMS, sent and received. Sorted on this phone into ${store.categories.length} categories. '
+          'Tick a category to select all of it, or open it to pick messages.',
           style: text.bodyMedium?.copyWith(color: colors.textMuted),
         ),
-        const UiGap(UiSpace.lg),
-        UiListGroup(
-          header: 'Categories',
-          children: [for (final c in store.categories) _categoryTile(c)],
+        const UiGap(UiSpace.md),
+        UiChoiceChips<MessageFilter>(
+          options: [for (final f in MessageFilter.values) UiChoice(f, f.label)],
+          value: store.filter,
+          scrollable: true,
+          onChanged: store.setFilter,
         ),
+        const UiGap(UiSpace.lg),
+        if (store.total == 0)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: UiSpace.xl),
+            child: UiEmptyState(
+              icon: Icons.mark_email_read_rounded,
+              title: 'Nothing here',
+              message: 'There are no messages to clean up in this view.',
+            ),
+          )
+        else ...[
+          UiListGroup(
+            header: 'Categories',
+            children: [for (final c in store.categories) _categoryTile(c)],
+          ),
+          const UiGap(UiSpace.lg),
+          UiButton(
+            'Delete everything shown',
+            icon: Icons.delete_forever_rounded,
+            variant: UiButtonVariant.danger,
+            loading: store.deleting,
+            onPressed: () => confirmDeleteShown(context, store),
+          ),
+        ],
       ],
     );
   }
