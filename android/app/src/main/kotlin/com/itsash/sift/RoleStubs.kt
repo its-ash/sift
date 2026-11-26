@@ -2,6 +2,7 @@ package com.itsash.sift
 
 import android.app.Activity
 import android.app.Service
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -42,7 +43,11 @@ class ComposeSmsActivity : Activity() {
             Toast.LENGTH_LONG,
         ).show()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+            }
         }
         finish()
     }

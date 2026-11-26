@@ -44,7 +44,11 @@ Future<void> confirmDeleteConversation(BuildContext context, InboxStore store, S
     destructive: true,
   );
   if (!ok || !context.mounted) return;
-  await _performDelete(context, store, () => store.deleteConversation(m.threadId));
+  await _performDelete(
+    context,
+    store,
+    m.threadId > 0 ? () => store.deleteConversation(m.threadId) : () => store.delete([m.key]),
+  );
 }
 
 /// Deletes everything the current filter shows, after two confirmations.

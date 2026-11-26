@@ -267,6 +267,7 @@ class InboxStore extends ChangeNotifier {
 
   /// Deletes every message in thread [threadId] (SMS and MMS) as one conversation.
   Future<CleanSummary> deleteConversation(int threadId) {
+    if (threadId <= 0) return runPlan(const DeletePlan());
     final keys = {for (final m in _all) if (m.threadId == threadId) m.key};
     return runPlan(planDelete(_all, keys, useThreads: true));
   }
